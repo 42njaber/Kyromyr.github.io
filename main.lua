@@ -41,10 +41,12 @@ if not DEBUG then
 
 			if status then
 				print(ret)
+				-- output.copy = ret:match".*\n.*()\n";
 			else
 				error = ret:gsub(".*GSUB_HERE", "")
 				print(error)
 				error("Script couldn't compile")
+				-- output.copy = nil;
 			end
 		elseif func == "import" then
 			local status, ret = pcall(import, lua_arg.value);
@@ -92,22 +94,26 @@ function compile(name, input, testing)
 	labels["99"] = 99;
 
 	for line in input:gmatch"[^\n]*" do
+		line = line:gsub("^%s+", ""):gsub("%s+$", "");
 		line_number = line_number + 1;
 
 		if line:match"^:" then
-			local scope, type, name = line:sub(2):match("^(%a+) (%a+) " .. TOKEN.identifier.patternAnywhere .."$");
+			local scope, type, name = line:sub(2):gsub(" *;.*", ""):match("^(%a+) (%a+) " .. TOKEN.identifier.patternAnywhere .."$");
 			assert(scope, "variable definition: [global/local] [int/double] name");
 
 			name = name:lower();
 			assert(scope == "global" or scope == "local", "variable scopes are 'global' and 'local'");
-			assert(type == "int" or type == "double", "variable types are 'int' and 'double'");
-			assert(not variables[name], "variable already exists: " .. name);
+			assert(type == "int" or type == "double" or type == "string", "variable types are 'int', 'double' and 'string'");
+			assert(not variables[name] and not labels[name], "variable/label already exists: " .. name);
 			
 			variables[name] = {name = name, scope = scope, type = type};
 		else
-			local label;
 			line = line
-				:gsub("^%s*([%w%.]+):", function(a) label = a; return ""; end)
+				:gsub("^%s*([%w%.]+):", function(name)
+					assert(not variables[name] and not labels[name], "variable/label already exists: " .. name);
+					table.insert(labels, name);
+					return "";
+				end)
 				:gsub("^%s+", ""):gsub("%s+$", "")
 			;
 
@@ -115,20 +121,28 @@ function compile(name, input, testing)
 				local node = cache(line, variables);
 
 				if node and node.func then
-					if node.func.ret == "impulse" then
-						table.insert(impulses, node);
-					elseif node.func.ret == "bool" then
-						table.insert(conditions, node);
-					elseif node.func.ret == "void" then
+					if node.func.ret == "void" then
 						table.insert(actions, node);
 
-						if label then
-							labels[label] = #actions;
+						for i = #labels, 1, -1 do
+							labels[table.remove(labels, i)] = #actions;
+						end
+					else
+						assert(#labels == 0, "labels cannot be placed before impulses/conditions");
+						
+						if node.func.ret == "impulse" then
+							table.insert(impulses, node);
+						else
+							table.insert(conditions, node);
 						end
 					end
 				end
 			end
 		end
+	end
+
+	for i = #labels, 1, -1 do
+		labels[table.remove(labels, i)] = 99;
 	end
 
 	local function ins(frmt, val)
@@ -158,7 +172,16 @@ function compile(name, input, testing)
 				end
 			elseif node.type == "string" then
 				ins("b", 4);
-				ins("s1", node.value);
+				local bytes = {};
+				local len = #node.value;
+
+				while len > 0 or #bytes == 0 do
+					table.insert(bytes, string.pack("B", (len >= 0x80 and 0x80 or 0x00) + (len & 0x7F)))
+					len = len >> 7;
+				end
+
+				table.insert(ret, table.concat(bytes));
+				table.insert(ret, node.value);
 			elseif node.type == "vector" then
 				ins("b", 5);
 				ins("f", node.x);
@@ -237,19 +260,24 @@ function import(input)
 		else
 			local func = assert(FUNCTION[func], "BUG REPORT: unknown function: " .. func);
 			local args = {};
+			local dynamicOperator = false;
 			
 			for i, arg in ipairs (func.args) do
 				table.insert(args, parse());
 				
 				if arg.type:match"^op_" then
-					args[i] = args[i]:sub(2,-2):lower()
-						:gsub("&&", "&")
-						:gsub("||", "|")
-						:gsub("^=$", "==")
-						:gsub("mod", "%%")
-						:gsub("pow", "^")
-						:gsub("log", "//")
-					;
+					if args[i]:match'^".*"$' then
+						args[i] = args[i]:sub(2, -2):lower()
+							:gsub("&&", "&")
+							:gsub("||", "|")
+							:gsub("^=$", "==")
+							:gsub("mod", "%%")
+							:gsub("pow", "^")
+							:gsub("log", "//")
+						;
+					end
+
+					dynamicOperator = not OPERATOR[ args[i] ];
 				end
 			end
 
@@ -266,7 +294,7 @@ function import(input)
 
 					return func_name == "set" and string.format("%s = %s", var, stripParens(args[2])) or var;
 				end
-			elseif func.name:match"^arithmetic" or func.name:match"^comparison" then
+			elseif not dynamicOperator and (func.name:match"^arithmetic" or func.name:match"^comparison") then
 				return string.format("(%s)", table.concat(args, " "));
 			elseif func.name == "concat" then
 				return string.format("(%s . %s)", table.unpack(args));
@@ -334,12 +362,12 @@ function unittest()
 "FUZBQ1RPUllfQ1JBRlRfM19yaW5ncwAAAAAAAAAACQAAABBsb2NhbC5kb3VibGUuc2V0CGNvbnN0YW50BAZ0YXJnZXQRYXJpdGhtZXRpYy5kb3VibGURZ2xvYmFsLmRvdWJsZS5nZXQIY29uc3RhbnQEBWNvdW50CGNvbnN0YW50BAEqCGNvbnN0YW50AwAAAAAAAABADmdlbmVyaWMuZ290b2lmCGNvbnN0YW50AgkAAAARY29tcGFyaXNvbi5kb3VibGUTZmFjdG9yeS5pdGVtcy5jb3VudAhjb25zdGFudAQEcmluZw5nbG9iYWwuaW50LmdldAhjb25zdGFudAQEdGllcghjb25zdGFudAQCPj0QbG9jYWwuZG91YmxlLmdldAhjb25zdGFudAQGdGFyZ2V0DmdlbmVyaWMuZ290b2lmCGNvbnN0YW50AgYAAAARY29tcGFyaXNvbi5kb3VibGUTZmFjdG9yeS5pdGVtcy5jb3VudAhjb25zdGFudAQDcm9kDmdsb2JhbC5pbnQuZ2V0CGNvbnN0YW50BAR0aWVyCGNvbnN0YW50BAI+PRBsb2NhbC5kb3VibGUuZ2V0CGNvbnN0YW50BAZ0YXJnZXQRZ2VuZXJpYy53YWl0d2hpbGUWZmFjdG9yeS5tYWNoaW5lLmFjdGl2ZQhjb25zdGFudAQGc2hhcGVyD2ZhY3RvcnkucHJvZHVjZQhjb25zdGFudAQFaW5nb3QOZ2xvYmFsLmludC5nZXQIY29uc3RhbnQEBHRpZXILZG91YmxlLmNlaWwRYXJpdGhtZXRpYy5kb3VibGURYXJpdGhtZXRpYy5kb3VibGUQbG9jYWwuZG91YmxlLmdldAhjb25zdGFudAQGdGFyZ2V0CGNvbnN0YW50BAEtE2ZhY3RvcnkuaXRlbXMuY291bnQIY29uc3RhbnQEA3JvZA5nbG9iYWwuaW50LmdldAhjb25zdGFudAQEdGllcghjb25zdGFudAQBLwhjb25zdGFudAMAAAAAAAAAQAhjb25zdGFudAQGc2hhcGVyEWdlbmVyaWMud2FpdHdoaWxlFmZhY3RvcnkubWFjaGluZS5hY3RpdmUIY29uc3RhbnQEBnNoYXBlcg9mYWN0b3J5LnByb2R1Y2UIY29uc3RhbnQEA3JvZA5nbG9iYWwuaW50LmdldAhjb25zdGFudAQEdGllchFhcml0aG1ldGljLmRvdWJsZRBsb2NhbC5kb3VibGUuZ2V0CGNvbnN0YW50BAZ0YXJnZXQIY29uc3RhbnQEAS0TZmFjdG9yeS5pdGVtcy5jb3VudAhjb25zdGFudAQEcmluZw5nbG9iYWwuaW50LmdldAhjb25zdGFudAQEdGllcghjb25zdGFudAQGc2hhcGVyEWdlbmVyaWMud2FpdHdoaWxlFmZhY3RvcnkubWFjaGluZS5hY3RpdmUIY29uc3RhbnQEBnNoYXBlcg5nbG9iYWwuaW50LnNldAhjb25zdGFudAQMY3JhZnQyX3N0YXRlDmFyaXRobWV0aWMuaW50Dmdsb2JhbC5pbnQuZ2V0CGNvbnN0YW50BAxjcmFmdDJfc3RhdGUIY29uc3RhbnQEASsIY29uc3RhbnQCBAAAAA==",
 "D0ZBQ1RPUllfQ1JBRlRfNAAAAAAAAAAABQAAAA5nbG9iYWwuaW50LnNldAhjb25zdGFudAQMY3JhZnQ0X3N0YXRlCGNvbnN0YW50AgEAAAAPZ2VuZXJpYy5leGVjdXRlCGNvbnN0YW50BBZmYWN0b3J5X2NyYWZ0XzRfY2FibGVzD2dlbmVyaWMuZXhlY3V0ZQhjb25zdGFudAQWZmFjdG9yeV9jcmFmdF80X3J1YmJlchFnZW5lcmljLndhaXR1bnRpbA5jb21wYXJpc29uLmludA5nbG9iYWwuaW50LmdldAhjb25zdGFudAQMY3JhZnQ0X3N0YXRlCGNvbnN0YW50BAI9PQhjb25zdGFudAIHAAAADWZhY3RvcnkuY3JhZnQIY29uc3RhbnQED2NhYmxlLmluc3VsYXRlZA5nbG9iYWwuaW50LmdldAhjb25zdGFudAQEdGllchFnbG9iYWwuZG91YmxlLmdldAhjb25zdGFudAQFY291bnQ=",
 "FkZBQ1RPUllfQ1JBRlRfNF9jYWJsZXMAAAAAAAAAAAcAAAAQbG9jYWwuZG91YmxlLnNldAhjb25zdGFudAQGdGFyZ2V0CmRvdWJsZS5tYXgKZG91YmxlLm1heAhjb25zdGFudAMAAAAAAADwPxFhcml0aG1ldGljLmRvdWJsZQNpMmQOZ2xvYmFsLmludC5nZXQIY29uc3RhbnQEBHRpZXIIY29uc3RhbnQEAS0IY29uc3RhbnQDAAAAAAAAAEAKZG91YmxlLm1heBFhcml0aG1ldGljLmRvdWJsZQhjb25zdGFudAMAAAAAAAAkQAhjb25zdGFudAQBLRFhcml0aG1ldGljLmRvdWJsZQhjb25zdGFudAMAAAAAAAAUQAhjb25zdGFudAQBKhFhcml0aG1ldGljLmRvdWJsZRFhcml0aG1ldGljLmRvdWJsZQNpMmQOZ2xvYmFsLmludC5nZXQIY29uc3RhbnQEBHRpZXIIY29uc3RhbnQEAS0IY29uc3RhbnQDAAAAAAAAIEAIY29uc3RhbnQEA3Bvdwhjb25zdGFudAMAAAAAAAAAQAtkb3VibGUuY2VpbBFhcml0aG1ldGljLmRvdWJsZRFhcml0aG1ldGljLmRvdWJsZRFhcml0aG1ldGljLmRvdWJsZQNpMmQOZ2xvYmFsLmludC5nZXQIY29uc3RhbnQEBHRpZXIIY29uc3RhbnQEAS0IY29uc3RhbnQDAAAAAAAA8D8IY29uc3RhbnQEA3Bvdwhjb25zdGFudAMAAAAAAAD4Pwhjb25zdGFudAQBLQhjb25zdGFudAMAAAAAAAAmQBBsb2NhbC5kb3VibGUuc2V0CGNvbnN0YW50BAZ0YXJnZXQRYXJpdGhtZXRpYy5kb3VibGUQbG9jYWwuZG91YmxlLmdldAhjb25zdGFudAQGdGFyZ2V0CGNvbnN0YW50BAEqEWdsb2JhbC5kb3VibGUuZ2V0CGNvbnN0YW50BAVjb3VudA5nZW5lcmljLmdvdG9pZghjb25zdGFudAIHAAAAEWNvbXBhcmlzb24uZG91YmxlE2ZhY3RvcnkuaXRlbXMuY291bnQIY29uc3RhbnQEBWNhYmxlDmdsb2JhbC5pbnQuZ2V0CGNvbnN0YW50BAR0aWVyCGNvbnN0YW50BAI+PRBsb2NhbC5kb3VibGUuZ2V0CGNvbnN0YW50BAZ0YXJnZXQRZ2VuZXJpYy53YWl0d2hpbGUWZmFjdG9yeS5tYWNoaW5lLmFjdGl2ZQhjb25zdGFudAQIcmVmaW5lcnkPZmFjdG9yeS5wcm9kdWNlCGNvbnN0YW50BAVpbmdvdA5nbG9iYWwuaW50LmdldAhjb25zdGFudAQEdGllcgtkb3VibGUuY2VpbBFhcml0aG1ldGljLmRvdWJsZRFhcml0aG1ldGljLmRvdWJsZRBsb2NhbC5kb3VibGUuZ2V0CGNvbnN0YW50BAZ0YXJnZXQIY29uc3RhbnQEAS0TZmFjdG9yeS5pdGVtcy5jb3VudAhjb25zdGFudAQFY2FibGUOZ2xvYmFsLmludC5nZXQIY29uc3RhbnQEBHRpZXIIY29uc3RhbnQEAS8IY29uc3RhbnQDAAAAAAAAAEAIY29uc3RhbnQECHJlZmluZXJ5EWdlbmVyaWMud2FpdHdoaWxlFmZhY3RvcnkubWFjaGluZS5hY3RpdmUIY29uc3RhbnQECHJlZmluZXJ5Dmdsb2JhbC5pbnQuc2V0CGNvbnN0YW50BAxjcmFmdDRfc3RhdGUOYXJpdGhtZXRpYy5pbnQOZ2xvYmFsLmludC5nZXQIY29uc3RhbnQEDGNyYWZ0NF9zdGF0ZQhjb25zdGFudAQBKwhjb25zdGFudAICAAAA",
-"FkZBQ1RPUllfQ1JBRlRfNF9ydWJiZXIAAAAAAAAAAAcAAAAQbG9jYWwuZG91YmxlLnNldAhjb25zdGFudAQGdGFyZ2V0CmRvdWJsZS5tYXgIY29uc3RhbnQDAAAAAAAAAAARYXJpdGhtZXRpYy5kb3VibGURYXJpdGhtZXRpYy5kb3VibGURYXJpdGhtZXRpYy5kb3VibGUIY29uc3RhbnQDAAAAAAAAAEAIY29uc3RhbnQEASoDaTJkDmdsb2JhbC5pbnQuZ2V0CGNvbnN0YW50BAR0aWVyCGNvbnN0YW50BAEtCGNvbnN0YW50AwAAAAAAABBACGNvbnN0YW50BAEtCmRvdWJsZS5tYXgIY29uc3RhbnQDAAAAAAAAAAARYXJpdGhtZXRpYy5kb3VibGUIY29uc3RhbnQDAAAAAAAAAEAIY29uc3RhbnQEAS0RYXJpdGhtZXRpYy5kb3VibGURYXJpdGhtZXRpYy5kb3VibGUDaTJkDmdsb2JhbC5pbnQuZ2V0CGNvbnN0YW50BAR0aWVyCGNvbnN0YW50BAEtCGNvbnN0YW50AwAAAAAAACBACGNvbnN0YW50BAEqEWFyaXRobWV0aWMuZG91YmxlA2kyZA5nbG9iYWwuaW50LmdldAhjb25zdGFudAQEdGllcghjb25zdGFudAQBLQhjb25zdGFudAMAAAAAAAAiQBBsb2NhbC5kb3VibGUuc2V0CGNvbnN0YW50BAZ0YXJnZXQRYXJpdGhtZXRpYy5kb3VibGUQbG9jYWwuZG91YmxlLmdldAhjb25zdGFudAQGdGFyZ2V0CGNvbnN0YW50BAEqEWdsb2JhbC5kb3VibGUuZ2V0CGNvbnN0YW50BAVjb3VudA5nZW5lcmljLmdvdG9pZghjb25zdGFudAIHAAAAEWNvbXBhcmlzb24uZG91YmxlE2ZhY3RvcnkuaXRlbXMuY291bnQIY29uc3RhbnQEDHBsYXRlLnJ1YmJlcghjb25zdGFudAIBAAAACGNvbnN0YW50BAI+PRBsb2NhbC5kb3VibGUuZ2V0CGNvbnN0YW50BAZ0YXJnZXQRZ2VuZXJpYy53YWl0d2hpbGUWZmFjdG9yeS5tYWNoaW5lLmFjdGl2ZQhjb25zdGFudAQHcHJlc3Nlcg9mYWN0b3J5LnByb2R1Y2UIY29uc3RhbnQEBnJ1YmJlcghjb25zdGFudAIBAAAAEWFyaXRobWV0aWMuZG91YmxlEGxvY2FsLmRvdWJsZS5nZXQIY29uc3RhbnQEBnRhcmdldAhjb25zdGFudAQBLRNmYWN0b3J5Lml0ZW1zLmNvdW50CGNvbnN0YW50BAxwbGF0ZS5ydWJiZXIIY29uc3RhbnQCAQAAAAhjb25zdGFudAQHcHJlc3NlchFnZW5lcmljLndhaXR3aGlsZRZmYWN0b3J5Lm1hY2hpbmUuYWN0aXZlCGNvbnN0YW50BAdwcmVzc2VyDmdsb2JhbC5pbnQuc2V0CGNvbnN0YW50BAxjcmFmdDRfc3RhdGUOYXJpdGhtZXRpYy5pbnQOZ2xvYmFsLmludC5nZXQIY29uc3RhbnQEDGNyYWZ0NF9zdGF0ZQhjb25zdGFudAQBKwhjb25zdGFudAIEAAAA",
 
+"FkZBQ1RPUllfQ1JBRlRfNF9ydWJiZXIAAAAAAAAAAAcAAAAQbG9jYWwuZG91YmxlLnNldAhjb25zdGFudAQGdGFyZ2V0CmRvdWJsZS5tYXgIY29uc3RhbnQDAAAAAAAAAAARYXJpdGhtZXRpYy5kb3VibGURYXJpdGhtZXRpYy5kb3VibGURYXJpdGhtZXRpYy5kb3VibGUIY29uc3RhbnQDAAAAAAAAAEAIY29uc3RhbnQEASoDaTJkDmdsb2JhbC5pbnQuZ2V0CGNvbnN0YW50BAR0aWVyCGNvbnN0YW50BAEtCGNvbnN0YW50AwAAAAAAABBACGNvbnN0YW50BAEtCmRvdWJsZS5tYXgIY29uc3RhbnQDAAAAAAAAAAARYXJpdGhtZXRpYy5kb3VibGUIY29uc3RhbnQDAAAAAAAAAEAIY29uc3RhbnQEAS0RYXJpdGhtZXRpYy5kb3VibGURYXJpdGhtZXRpYy5kb3VibGUDaTJkDmdsb2JhbC5pbnQuZ2V0CGNvbnN0YW50BAR0aWVyCGNvbnN0YW50BAEtCGNvbnN0YW50AwAAAAAAACBACGNvbnN0YW50BAEqEWFyaXRobWV0aWMuZG91YmxlA2kyZA5nbG9iYWwuaW50LmdldAhjb25zdGFudAQEdGllcghjb25zdGFudAQBLQhjb25zdGFudAMAAAAAAAAiQBBsb2NhbC5kb3VibGUuc2V0CGNvbnN0YW50BAZ0YXJnZXQRYXJpdGhtZXRpYy5kb3VibGUQbG9jYWwuZG91YmxlLmdldAhjb25zdGFudAQGdGFyZ2V0CGNvbnN0YW50BAEqEWdsb2JhbC5kb3VibGUuZ2V0CGNvbnN0YW50BAVjb3VudA5nZW5lcmljLmdvdG9pZghjb25zdGFudAIHAAAAEWNvbXBhcmlzb24uZG91YmxlE2ZhY3RvcnkuaXRlbXMuY291bnQIY29uc3RhbnQEDHBsYXRlLnJ1YmJlcghjb25zdGFudAIBAAAACGNvbnN0YW50BAI+PRBsb2NhbC5kb3VibGUuZ2V0CGNvbnN0YW50BAZ0YXJnZXQRZ2VuZXJpYy53YWl0d2hpbGUWZmFjdG9yeS5tYWNoaW5lLmFjdGl2ZQhjb25zdGFudAQHcHJlc3Nlcg9mYWN0b3J5LnByb2R1Y2UIY29uc3RhbnQEBnJ1YmJlcghjb25zdGFudAIBAAAAEWFyaXRobWV0aWMuZG91YmxlEGxvY2FsLmRvdWJsZS5nZXQIY29uc3RhbnQEBnRhcmdldAhjb25zdGFudAQBLRNmYWN0b3J5Lml0ZW1zLmNvdW50CGNvbnN0YW50BAxwbGF0ZS5ydWJiZXIIY29uc3RhbnQCAQAAAAhjb25zdGFudAQHcHJlc3NlchFnZW5lcmljLndhaXR3aGlsZRZmYWN0b3J5Lm1hY2hpbmUuYWN0aXZlCGNvbnN0YW50BAdwcmVzc2VyDmdsb2JhbC5pbnQuc2V0CGNvbnN0YW50BAxjcmFmdDRfc3RhdGUOYXJpdGhtZXRpYy5pbnQOZ2xvYmFsLmludC5nZXQIY29uc3RhbnQEDGNyYWZ0NF9zdGF0ZQhjb25zdGFudAQBKwhjb25zdGFudAIEAAAA",
 "BHRlc3QAAAAAAwAAABJ0b3duLndpbmRvdy5pc29wZW4IY29uc3RhbnQEBm11c2V1bRJ0b3duLndpbmRvdy5pc29wZW4IY29uc3RhbnQEBmFyY2FkZRJ0b3duLndpbmRvdy5pc29wZW4IY29uc3RhbnQECHdvcmtzaG9wDgAAAA1mYWN0b3J5LmNyYWZ0CGNvbnN0YW50BBFwcm9kdWNlci5zaGlweWFyZAhjb25zdGFudAIBAAAACGNvbnN0YW50AwAAAAAAAPA/DWZhY3RvcnkuY3JhZnQIY29uc3RhbnQEFnByb2R1Y2VyLnN0YXR1ZW9mY3Vib3MIY29uc3RhbnQCAQAAAAhjb25zdGFudAMAAAAAAADwPw1mYWN0b3J5LmNyYWZ0CGNvbnN0YW50BA1wcm9kdWNlci5nZW1zCGNvbnN0YW50AgEAAAAIY29uc3RhbnQDAAAAAAAA8D8NZmFjdG9yeS5jcmFmdAhjb25zdGFudAQTcHJvZHVjZXIuZXhvdGljZ2Vtcwhjb25zdGFudAIBAAAACGNvbnN0YW50AwAAAAAAAPA/DWZhY3RvcnkuY3JhZnQIY29uc3RhbnQEDG1hY2hpbmUub3Zlbghjb25zdGFudAIBAAAACGNvbnN0YW50AwAAAAAAAPA/DWZhY3RvcnkuY3JhZnQIY29uc3RhbnQED21hY2hpbmUucHJlc3Nlcghjb25zdGFudAIBAAAACGNvbnN0YW50AwAAAAAAAPA/DWZhY3RvcnkuY3JhZnQIY29uc3RhbnQEFW1hY2hpbmUudHJhbnNwb3J0YmVsdAhjb25zdGFudAIBAAAACGNvbnN0YW50AwAAAAAAAPA/DWZhY3RvcnkuY3JhZnQIY29uc3RhbnQED21hY2hpbmUuY3J1c2hlcghjb25zdGFudAIBAAAACGNvbnN0YW50AwAAAAAAAPA/DWZhY3RvcnkuY3JhZnQIY29uc3RhbnQEDW1hY2hpbmUubWl4ZXIIY29uc3RhbnQCAQAAAAhjb25zdGFudAMAAAAAAADwPw1mYWN0b3J5LmNyYWZ0CGNvbnN0YW50BBBtYWNoaW5lLnJlZmluZXJ5CGNvbnN0YW50AgEAAAAIY29uc3RhbnQDAAAAAAAA8D8NZmFjdG9yeS5jcmFmdAhjb25zdGFudAQRbWFjaGluZS5hc3NlbWJsZXIIY29uc3RhbnQCAQAAAAhjb25zdGFudAMAAAAAAADwPw1mYWN0b3J5LmNyYWZ0CGNvbnN0YW50BA5tYWNoaW5lLnNoYXBlcghjb25zdGFudAIBAAAACGNvbnN0YW50AwAAAAAAAPA/DWZhY3RvcnkuY3JhZnQIY29uc3RhbnQEDm1hY2hpbmUuY3V0dGVyCGNvbnN0YW50AgEAAAAIY29uc3RhbnQDAAAAAAAA8D8NZmFjdG9yeS5jcmFmdAhjb25zdGFudAQObWFjaGluZS5ib2lsZXIIY29uc3RhbnQCAQAAAAhjb25zdGFudAMAAAAAAADwPw==",
 "BHRlc3QAAAAAAAAAAAoAAAAPZmFjdG9yeS5wcm9kdWNlCGNvbnN0YW50BAZydWJiZXIIY29uc3RhbnQCAQAAAAhjb25zdGFudAMAAAAAAADwPwhjb25zdGFudAQEb3Zlbg9mYWN0b3J5LnByb2R1Y2UIY29uc3RhbnQEA29yZQhjb25zdGFudAIBAAAACGNvbnN0YW50AwAAAAAAAPA/CGNvbnN0YW50BAlhc3NlbWJsZXIPZmFjdG9yeS5wcm9kdWNlCGNvbnN0YW50BARkdXN0CGNvbnN0YW50AgEAAAAIY29uc3RhbnQDAAAAAAAA8D8IY29uc3RhbnQECHJlZmluZXJ5D2ZhY3RvcnkucHJvZHVjZQhjb25zdGFudAQFaW5nb3QIY29uc3RhbnQCAQAAAAhjb25zdGFudAMAAAAAAADwPwhjb25zdGFudAQHY3J1c2hlcg9mYWN0b3J5LnByb2R1Y2UIY29uc3RhbnQEC3BsYXRlLnN0YWNrCGNvbnN0YW50AgEAAAAIY29uc3RhbnQDAAAAAAAA8D8IY29uc3RhbnQEBmN1dHRlcg9mYWN0b3J5LnByb2R1Y2UIY29uc3RhbnQEA3JvZAhjb25zdGFudAIBAAAACGNvbnN0YW50AwAAAAAAAPA/CGNvbnN0YW50BAdwcmVzc2VyD2ZhY3RvcnkucHJvZHVjZQhjb25zdGFudAQFcGxhdGUIY29uc3RhbnQCAQAAAAhjb25zdGFudAMAAAAAAADwPwhjb25zdGFudAQFbWl4ZXIPZmFjdG9yeS5wcm9kdWNlCGNvbnN0YW50BAVjYWJsZQhjb25zdGFudAIBAAAACGNvbnN0YW50AwAAAAAAAPA/CGNvbnN0YW50BAZzaGFwZXIPZmFjdG9yeS5wcm9kdWNlCGNvbnN0YW50BARsdW1wCGNvbnN0YW50AgEAAAAIY29uc3RhbnQDAAAAAAAA8D8IY29uc3RhbnQEBmJvaWxlcg9mYWN0b3J5LnByb2R1Y2UIY29uc3RhbnQEBWJsb2NrCGNvbnN0YW50AgEAAAAIY29uc3RhbnQDAAAAAAAA8D8IY29uc3RhbnQEBG92ZW4=",
 "BHRlc3QAAAAAAAAAAAkAAAARZ2xvYmFsLmRvdWJsZS5zZXQIY29uc3RhbnQEABNmYWN0b3J5Lml0ZW1zLmNvdW50CGNvbnN0YW50BAtibG9jay5kZW5zZQhjb25zdGFudAIBAAAAEWdsb2JhbC5kb3VibGUuc2V0CGNvbnN0YW50BAATZmFjdG9yeS5pdGVtcy5jb3VudAhjb25zdGFudAQLcGxhdGUuZGVuc2UIY29uc3RhbnQCAQAAABFnbG9iYWwuZG91YmxlLnNldAhjb25zdGFudAQAE2ZhY3RvcnkuaXRlbXMuY291bnQIY29uc3RhbnQEBXNjcmV3CGNvbnN0YW50AgEAAAARZ2xvYmFsLmRvdWJsZS5zZXQIY29uc3RhbnQEABNmYWN0b3J5Lml0ZW1zLmNvdW50CGNvbnN0YW50BAxwbGF0ZS5ydWJiZXIIY29uc3RhbnQCAQAAABFnbG9iYWwuZG91YmxlLnNldAhjb25zdGFudAQAE2ZhY3RvcnkuaXRlbXMuY291bnQIY29uc3RhbnQEDXBsYXRlLmNpcmN1aXQIY29uc3RhbnQCAQAAABFnbG9iYWwuZG91YmxlLnNldAhjb25zdGFudAQAE2ZhY3RvcnkuaXRlbXMuY291bnQIY29uc3RhbnQEBHJpbmcIY29uc3RhbnQCAQAAABFnbG9iYWwuZG91YmxlLnNldAhjb25zdGFudAQAE2ZhY3RvcnkuaXRlbXMuY291bnQIY29uc3RhbnQEBHBpcGUIY29uc3RhbnQCAQAAABFnbG9iYWwuZG91YmxlLnNldAhjb25zdGFudAQAE2ZhY3RvcnkuaXRlbXMuY291bnQIY29uc3RhbnQEBHdpcmUIY29uc3RhbnQCAQAAABFnbG9iYWwuZG91YmxlLnNldAhjb25zdGFudAQAE2ZhY3RvcnkuaXRlbXMuY291bnQIY29uc3RhbnQEB2NpcmN1aXQIY29uc3RhbnQCAQAAAA==",
-"BHRlc3QAAAAAAAAAAA0AAAAQdG93bi53aW5kb3cuc2hvdwhjb25zdGFudAQIbmV3cm91bmQIY29uc3RhbnQBARB0b3duLndpbmRvdy5zaG93CGNvbnN0YW50BAt0cmFkaW5ncG9zdAhjb25zdGFudAEBEHRvd24ud2luZG93LnNob3cIY29uc3RhbnQECnBvd2VycGxhbnQIY29uc3RhbnQBARB0b3duLndpbmRvdy5zaG93CGNvbnN0YW50BAdmYWN0b3J5CGNvbnN0YW50AQEQdG93bi53aW5kb3cuc2hvdwhjb25zdGFudAQKbGFib3JhdG9yeQhjb25zdGFudAEBEHRvd24ud2luZG93LnNob3cIY29uc3RhbnQECHNoaXB5YXJkCGNvbnN0YW50AQEQdG93bi53aW5kb3cuc2hvdwhjb25zdGFudAQId29ya3Nob3AIY29uc3RhbnQBARB0b3duLndpbmRvdy5zaG93CGNvbnN0YW50BAZhcmNhZGUIY29uc3RhbnQBARB0b3duLndpbmRvdy5zaG93CGNvbnN0YW50BAZtdXNldW0IY29uc3RhbnQBARB0b3duLndpbmRvdy5zaG93CGNvbnN0YW50BAxoZWFkcXVhcnRlcnMIY29uc3RhbnQBARB0b3duLndpbmRvdy5zaG93CGNvbnN0YW50BBBjb25zdHJ1Y3Rpb25maXJtCGNvbnN0YW50AQEQdG93bi53aW5kb3cuc2hvdwhjb25zdGFudAQNc3RhdHVlb2ZjdWJvcwhjb25zdGFudAEBEHRvd24ud2luZG93LnNob3cIY29uc3RhbnQEBG1pbmUIY29uc3RhbnQBAQ==",
+"BHRlc3QAAAAAAAAAAA0AAAAQdG93bi53aW5kb3cuc2hvdwhjb25zdGFudAQMdG93ZXJ0ZXN0aW5nCGNvbnN0YW50AQEQdG93bi53aW5kb3cuc2hvdwhjb25zdGFudAQLdHJhZGluZ3Bvc3QIY29uc3RhbnQBARB0b3duLndpbmRvdy5zaG93CGNvbnN0YW50BApwb3dlcnBsYW50CGNvbnN0YW50AQEQdG93bi53aW5kb3cuc2hvdwhjb25zdGFudAQHZmFjdG9yeQhjb25zdGFudAEBEHRvd24ud2luZG93LnNob3cIY29uc3RhbnQECmxhYm9yYXRvcnkIY29uc3RhbnQBARB0b3duLndpbmRvdy5zaG93CGNvbnN0YW50BAhzaGlweWFyZAhjb25zdGFudAEBEHRvd24ud2luZG93LnNob3cIY29uc3RhbnQECHdvcmtzaG9wCGNvbnN0YW50AQEQdG93bi53aW5kb3cuc2hvdwhjb25zdGFudAQGYXJjYWRlCGNvbnN0YW50AQEQdG93bi53aW5kb3cuc2hvdwhjb25zdGFudAQGbXVzZXVtCGNvbnN0YW50AQEQdG93bi53aW5kb3cuc2hvdwhjb25zdGFudAQMaGVhZHF1YXJ0ZXJzCGNvbnN0YW50AQEQdG93bi53aW5kb3cuc2hvdwhjb25zdGFudAQQY29uc3RydWN0aW9uZmlybQhjb25zdGFudAEBEHRvd24ud2luZG93LnNob3cIY29uc3RhbnQEDXN0YXR1ZW9mY3Vib3MIY29uc3RhbnQBARB0b3duLndpbmRvdy5zaG93CGNvbnN0YW50BARtaW5lCGNvbnN0YW50AQE=",
 
 	};
 

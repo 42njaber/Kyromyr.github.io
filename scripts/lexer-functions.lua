@@ -2,7 +2,7 @@ FUNCTION_LIST = {};
 FUNCTION = {};
 
 local strings = {
-	window = {"newround", "tradingpost", "powerplant", "factory", "laboratory", "shipyard", "workshop", "arcade", "museum", "headquarters", "constructionfirm", "statueofcubos", "mine"},
+	window = {"towertesting", "tradingpost", "powerplant", "factory", "laboratory", "shipyard", "workshop", "arcade", "museum", "headquarters", "constructionfirm", "statueofcubos", "mine"},
 
 	item = {"block.dense", "plate.dense", "screw", "plate.rubber", "plate.circuit", "ring", "pipe", "wire", "circuit"},
 	craft = {"motor", "chip", "cable.insulated", "block", "pump", "plate.stack", "lump", "producer.town", "producer.mine", "producer.powerplant", "producer.factory", "producer.workshop", "producer.constructionFirm", "producer.headquarters", "producer.laboratory", "producer.tradingpost", "producer.arcade", "producer.museum", "producer.shipyard", "producer.statueofcubos", "producer.gems", "producer.exoticgems", "machine.oven", "machine.presser", "machine.transportbelt", "machine.crusher", "machine.mixer", "machine.refinery", "machine.assembler", "machine.shaper", "machine.cutter", "machine.boiler"},
@@ -11,6 +11,7 @@ local strings = {
 
 	inventory = {"inventory", "equipped", "combinator", "cuboscube"},
 	element = {"fire", "water", "earth", "air", "nature", "light", "darkness", "electricity"},
+	elementMarket = {"fire", "water", "earth", "air", "nature", "light", "darkness", "electricity", "universal"},
 };
 
 for _, tbl in pairs (strings) do
@@ -32,10 +33,13 @@ local function stringValid(tbl, str, prefix)
 	return strings[tbl][str], string.format("%s: %s", prefix, table.concat(strings[tbl], ", "));
 end
 local function rangeValid(value, min, max)
-	return (value >= min and value <= max), string.format("Range: %s-%s", min, max);
+	return (value >= min and value <= max), string.format("Range: %s - %s", min, max);
 end
 
 VALIDATOR = {
+	["0-1"] = function(value) return rangeValid(value, 0.0, 1.0); end,
+	scroll = function(value) local a, b = rangeValid(value, 0.0, 1.0); return value < 0.0 or a, b .. " (negative to ignore)"; end,
+
 	window = function(value) return stringValid("window", value, "Windows"); end,
 
 	sellx = function(value) return rangeValid(value, 0, 18); end,
@@ -51,46 +55,42 @@ VALIDATOR = {
 
 	inv = function(value) return stringValid("inventory", value, "Inventories"); end,
 	element = function(value) return stringValid("element", value, "Elements"); end,
+	elementMarket = function(value) return stringValid("elementMarket", value, "Elements"); end,
 };
 
 local primitives = {void=1, impulse=1, bool=1, int=1, double=1, string=1, vector=1, label=2, op_set=2, op_comp=2, op_mod=2};
 
 local functions = [[
 impulse wakeup() Impulse
-impulse key.0() Impulse
-impulse key.1() Impulse
-impulse key.2() Impulse
-impulse key.3() Impulse
-impulse key.4() Impulse
-impulse key.5() Impulse
-impulse key.6() Impulse
-impulse key.7() Impulse
-impulse key.8() Impulse
-impulse key.9() Impulse
+impulse key.<char>() {Impulse impulse key.#() 0-9, a-z}
 impulse open.mine() Impulse
 impulse open.factory() Impulse
 impulse open.workshop() Impulse
 impulse open.powerplant() Impulse
 impulse open.museum() Impulse
+impulse game.newround() Impulse
 
 void <scope>.<type>.set(string:variable, <type>)
 <type> <scope>.<type>.get(string:variable)
-<type> arithmetic.<type>(<type>, op_mod, <type>)
 bool comparison.<typeext>(<typeext>, op_comp, <typeext>)
+<type> arithmetic.<type>(<type>, op_mod, <type>)
 
-string concat(string, string) Misc
-double const.pi() Misc
+int string.length(string) String #len#
+string concat(string, string) String
+string substring(string, int:offset, int:length) String #sub#
 
-<type> <type>.min(<type>, <type>)
-<type> <type>.max(<type>, <type>)
-<type> <type>.rnd(<type>, <type>)
+double const.pi() Number
 
-void min(void, void) {Misc number min (a, b)}
-void max(void, void) {Misc number max (a, b)}
-void rnd(void, void) {Misc number rnd (min, max)}
-double double.floor(double) Misc
-double double.ceil(double) Misc
-double double.round(double) Misc
+<num> <num>.min(<num>, <num>)
+<num> <num>.max(<num>, <num>)
+<num> <num>.rnd(<num>, <num>)
+
+void min(void, void) {Number number min (a, b)}
+void max(void, void) {Number number max (a, b)}
+void rnd(void, void) {Number number rnd (min, max)}
+double double.floor(double) Number
+double double.ceil(double) Number
+double double.round(double) Number
 
 int d2i(double) Conversion
 double i2d(int) Conversion
@@ -99,7 +99,7 @@ string d2s(double) Conversion
 
 double vec2.x(vector) Vector
 double vec2.y(vector) Vector
-vector vec.fromCoords(double:x, double:y) Vector
+vector vec.fromCoords(double:x, double:y) Vector #vec#
 vector mouse.position() Vector
 
 void generic.execute(string:script) Generic
@@ -111,13 +111,28 @@ void generic.waituntil(bool) Generic
 void generic.goto(label) Generic
 void generic.gotoif(label, bool) Generic
 void generic.click(vector) Generic
+void generic.slider(vector:where, double:value[0-1]) Generic
+void generic.scrollrect(vector:where, double:horizontal[scroll], double:vertical[scroll]) Generic #scrollbar#
 
 int screen.width() Generic
 int screen.height() Generic
+double screen.width.d() Generic #width.d#
+double screen.height.d() Generic #height.d#
 
 bool town.window.isopen(string:window[window]) Town
 void town.window.show(string:window[window], bool) Town
 
+bool tower.stunned() Tower
+int tower.buffs.negative() Tower
+double tower.health(bool:percent) Tower
+double tower.health.max() Tower #health.max#
+double tower.health.regeneration() Tower #health.regen#
+double tower.energy(bool:percent) Tower
+double tower.energy.max() Tower #energy.max#
+double tower.energy.regeneration() Tower #energy.regen#
+double tower.shield(bool:percent) Tower
+double tower.shield.max() Tower #shield.max#
+double tower.module.cooldown(int:skill) Tower
 void tower.module.useinstant(int:skill) Tower
 
 void powerplant.sell(int:x[sellx], int:y[selly]) Power Plant
@@ -136,10 +151,18 @@ int museum.stone.tier(string:inventory[inv], int:slot) Museum
 string museum.stone.element(string:inventory[inv], int:slot) Museum
 void museum.fill(bool:enable) Museum
 void museum.buy(string:element[element]) Museum
-void museum.combine() Museum
+void museum.buyMarket(string:element[elementMarket], int:tier) Museum
+void museum.combine(int:tierMax) Museum
 void museum.transmute() Museum
 void museum.move(string:from[inv], int:slot, string:to[inv]) Museum
 void museum.delete(string:inventory[inv], int:slot) Museum
+void museum.clear(string:inventory[inv]) Museum
+
+int tradingpost.offerCount() Trading Post
+void tradingpost.refresh() Trading Post
+void tradingpost.trade(int:offer, double:pct[0-1]) Trading Post
+
+void clickrel(double:x[0-1], double:y[0-1]) Shortcut
 ]]
 
 local function addList(category, display)
@@ -150,27 +173,49 @@ local function addList(category, display)
 end
 
 local function parseFunction(line)
-	line = line:gsub("%b{}", function(a)
+	local short;
+	
+	line = line:gsub("%b##", function(a)
+		short = a:sub(2, -2);
+		return "";
+	end):gsub("(%a+)%.(%a+)%.(%a+)", function(a,b,c)
+		if a == "global" or a == "local" then
+			short = a:sub(1,1) .. b:sub(1,1) .. c:sub(1,1);
+		end
+	end):gsub("(%a+)%.(%a+)", function(a,b)
+		if a == "arithmetic" or a == "comparison" then
+			short = a:sub(1,1) .. "." .. b:sub(1,1);
+		end
+	end):gsub("%b{}", function(a)
 		a = a:sub(2, -2);
 		addList(a:match"(%a+) (.+)");
 		return "";
-	end);
+	end):gsub("^%s+", ""):gsub("%s+$", "");
 
 	local ret, name, arg, category = line:match"([^ ]+) (.-)(%b()) ?(.*)";
-	local short, args, display = name, {}, {};
+	local args, display = {}, {};
 
-	if line:match"%b<>" then
+	if line:match"%b<>" == "<char>" then
+		for char in string.gmatch("0123456789abcdefghijklmnopqrstuvwxyz", ".") do
+			local new = line:gsub("%b<>", char);
+			parseFunction(new);
+		end
+
+		return;
+	elseif line:match"%b<>" then
 		local done = {};
 		
 		for _, scope in ipairs {"global", "local"} do
 			for _, typeext in ipairs {"bool", "int", "double", "string"} do
-				for _, type in ipairs {"int", "double"} do
-					local tbl = {scope=scope, typeext=typeext, type=type};
-					local new = line:gsub("%b<>", function(a) return tbl[a:sub(2,-2)]; end);
-					
-					if not done[new] then
-						done[new] = true;
-						parseFunction(new);
+				for _, type in ipairs {"int", "double", "string"} do
+					for _, num in ipairs {"int", "double"} do
+						local tbl = {scope=scope, typeext=typeext, type=type, num=num};
+						local new = line:gsub("%b<>", function(a) return tbl[a:sub(2,-2)]; end);
+						
+						if not done[new] then
+							done[new] = true;
+							parseFunction(new);
+						end
 					end
 				end
 			end
@@ -197,13 +242,11 @@ local function parseFunction(line)
 		table.insert(display, name == "" and type or string.format("%s: %s", type, name));
 	end
 
-	if category ~= "Impulse" and category ~= "" then
+	if not short and category ~= "Impulse" and category ~= "" then
 		short = name:match"%.(%a+)$" or name;
 	end
-
-	if short == "fromCoords" then
-		short = "vec";
-	end
+	
+	short = short or name;
 
 	FUNCTION[name] = {
 		name = name,
@@ -226,7 +269,7 @@ end
 
 local functionList = {};
 
-for _, category in ipairs {"Impulse", "Generic", "Town", "Tower", "Power Plant", "Mine", "Factory", "Museum", "Misc", "Conversion", "Vector"} do
+for _, category in ipairs {"Impulse", "Generic", "Town", "Tower", "Power Plant", "Mine", "Factory", "Museum", "Trading Post", "Number", "String", "Conversion", "Vector", "Shortcut"} do
 	table.insert(functionList, string.format('<optgroup label="%s">', category));
 
 	for _, func in ipairs (FUNCTION_LIST[category]) do

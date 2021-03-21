@@ -54,7 +54,7 @@ local function nextToken(str, pos, prev)
 				end
 
 				assert(ret.type ~= "operator" or ret.op, tokenError(pos, "invalid operator: " .. match));
-				assert(#token == 0 or prev and token[prev.type], tokenError(pos, "unexpected symbol: " .. (ret.type == "eof" and "<eof>" or match)));
+				assert(#token == 0 or not prev or token[prev.type], tokenError(pos, "unexpected symbol: " .. (ret.type == "eof" and "<eof>" or match)));
 
 				return ret;
 			end
@@ -66,7 +66,7 @@ end
 
 local function resolveID(token)
 	if token.type == "identifier" and not token.func then
-		token.var = assert(variables[token.value], tokenError(token, "undefined variable: " .. token.value));
+		token.var = assert(variables[token.value:lower()], tokenError(token, "undefined variable: " .. token.value));
 		token.type = "string";
 		
 		local new = newNode(token.pos, nil, string.format("%s.%s.get", token.var.scope, token.var.type));
@@ -100,7 +100,17 @@ local function consumeTokensWorker(node)
 	if #node.tokens == 0 then
 		return;
 	elseif #node.tokens == 1 then
-		table.insert(node.args, resolveID(node.tokens[1]));
+		local arg = node.func and node.func.args[#node.args + 1];
+		local token = node.tokens[1];
+
+		if arg and arg.type == "label" then
+			if token.type == "number" or (token.type == "identifier" and not token.func and not variables[token.value:lower()]) then
+				token.type = "label";
+				token.value = tostring(token.value);
+			end
+		end
+
+		table.insert(node.args, resolveID(token));
 		node.tokens = {};
 		return;
 	end
@@ -130,9 +140,16 @@ local function consumeTokensWorker(node)
 						op.op = OPERATOR[op.value];
 						
 						typecheck(left, op, right);
-						local new = newNode(left.pos, node, "arithmetic." .. resolveType(left.args[1]));
-						new.args = {left, op, right};
-						right = new;
+
+						if op.value == "." then
+							local new = newNode(left.pos, node, "concat");
+							new.args = {left, right};
+							right = new;
+						else
+							local new = newNode(left.pos, node, "arithmetic." .. resolveType(left.args[1]));
+							new.args = {left, op, right};
+							right = new;
+						end
 					end
 					
 					typecheck(left.args[1], op, right);
@@ -141,7 +158,7 @@ local function consumeTokensWorker(node)
 				else
 					local const = false;
 					
-					if type == "op_mod" and (left.type == "number" or left.type == "string") and (right.type == "number" or right.type == "string") then
+					if type == "op_mod" and (left.type == right.type or op.value == ".") and (left.type == "number" or left.type == "string") and (right.type == "number" or right.type == "string") then
 						local status, ret = pcall(load(
 							op.value == "."
 							and string.format('return "%s" .. "%s"', left.value, right.value)
@@ -159,9 +176,9 @@ local function consumeTokensWorker(node)
 					end
 					
 					if not const then
-						if op.value == "." then
-							local typeLeft, typeRight = resolveType(left), resolveType(right);
+						local typeLeft, typeRight = resolveType(left), resolveType(right);
 
+						if op.value == "." then
 							if typeLeft == "int" or typeLeft == "double" then
 								local new = newNode(left.pos, node, typeLeft == "int" and "i2s" or "d2s");
 								new.args = {left};
@@ -179,6 +196,11 @@ local function consumeTokensWorker(node)
 							new.args = {left, right};
 							table.insert(node.tokens, j, new);
 						else
+							if type == "op_mod" then
+								assert(typeLeft == "int" or typeLeft == "double", tokenError(left, "arithmetic cannot be performed on a " .. typeLeft));
+								assert(typeRight == "int" or typeRight == "double", tokenError(right, "arithmetic cannot be performed on a " .. typeRight));
+							end
+							
 							typecheck(left, op, right);
 							local new = newNode(left.pos, node, (type == "op_mod" and "arithmetic." or "comparison.") .. resolveType(left));
 							new.args = {left, op, right};
@@ -208,7 +230,7 @@ local function consumeTokens(node)
 		assert(expected, tokenError(node, last, string.format("function %s expects %s arguments, got %s", node.func.short, #node.func.args, arg)));
 
 		if not dynamicFunc[node.func.name] then
-			assert(type == expected.type, tokenError(node, last, string.format("bad argument #%s to %s (%s expected, got %s)", arg, node.func.short, expected.type, type)));
+			assert(type == expected.type or (type == "int" and expected.type == "label") or (type == "string" and expected.type:match"^op"), tokenError(node, last, string.format("bad argument #%s to %s (%s expected, got %s)", arg, node.func.short, expected.type, type)));
 
 			if expected.valid and (last.type == "number" or last.type == "string") then
 				local status, err = expected.valid(last.value);
@@ -220,7 +242,7 @@ end
 
 function lexer(line, vars)
 	local debug = {};
-	local node;
+	local node, prev;
 	local pos = 1;
 
 	node = newNode();
@@ -250,9 +272,20 @@ function lexer(line, vars)
 				if node.func then
 					assert(#node.args == #node.func.args, tokenError(node, token, string.format("function %s expects %s arguments, got %s", node.func.short, #node.func.args, #node.args)));
 
-					if dynamicFunc[node.func.name] then
+					if node.func.name == "clickrel" then
+						for k, arg in ipairs (node.args) do
+							local new = newNode(arg.pos, node, "arithmetic.double");
+							new.args = {arg, nextToken"*", newNode(arg.pos, node, k == 1 and "screen.width.d" or "screen.height.d")};
+							node.args[k] = new;
+						end
+
+						local new = newNode(node.pos, node, "vec.fromCoords");
+						new.args = node.args;
+						node.args = {new};
+						node.func = FUNCTION.click;
+					elseif dynamicFunc[node.func.name] then
 						local arg = resolveType(node.args[1]);
-						assert(arg == "int" or arg == "double", tokenError(node, node.args[1], string.format("bad argument #1 to %s (int or double expected, got %s)", node.func.short, type)));
+						assert(arg == "int" or arg == "double", tokenError(node, node.args[1], string.format("bad argument #1 to %s (int or double expected, got %s)", node.func.short, arg)));
 
 						for i = 2, #node.args do
 							local type = resolveType(node.args[i]);
@@ -283,12 +316,7 @@ function lexer(line, vars)
 				table.insert(node.tokens, token);
 				local arg = node.func and node.func.args[#node.args + 1];
 
-				if arg and arg.type == "label" then
-					if token.type == "identifier" or token.type == "number" then
-						token.type = "label";
-						token.value = tostring(token.value);
-					end
-				elseif token.type == "operator" and token.op.type == "op_set" then
+				if token.type == "operator" and token.op.type == "op_set" then
 					assert(not node.parent and #node.tokens == 2 and node.tokens[1].type == "identifier", tokenError(token, "unexpected symbol: " .. token.value));
 				end
 			end
