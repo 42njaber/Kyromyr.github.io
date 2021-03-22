@@ -1,4 +1,4 @@
-package.path = "scripts/?.lua";
+package.path = arg[0]:gsub("[^/]*.lua", ""):gsub(".*", "%1scripts/?.lua");
 
 local line_number;
 local _cache = {};
@@ -30,17 +30,24 @@ if not DEBUG then
 		return content
 	end
 
+	function writeAll(file, content)
+		local f = assert(io.open(file, "w"))
+		f:write(content)
+		f:close()
+	end
 
 	function lua_main(func)
 		-- window.console.clear();
 
 		if func == "compile" then
+			assert(arg[2])
+			assert(arg[3])
 			assert = assert_lexer;
-			local status, ret = pcall(compile, arg[2], readAll(arg[2]));
+			local status, ret = pcall(compile, arg[2]:gsub(".*/", ""):gsub(".tpt2$", ""):gsub("_", " "), readAll(arg[2]), false);
 			assert = assert_old;
 
 			if status then
-				print(ret)
+				writeAll(arg[3], ret)
 				-- output.copy = ret:match".*\n.*()\n";
 			else
 				error = ret:gsub(".*GSUB_HERE", "")
@@ -394,4 +401,5 @@ end
 
 LOAD_DONE = true;
 
+assert(arg[1])
 lua_main(arg[1])
