@@ -76,7 +76,7 @@ if not DEBUG then
 
 end
 
-local function cache(line, variables)
+local function cache(line, variables, labels)
 	local key = {};
 
 	for k, v in pairs (variables) do
@@ -88,7 +88,7 @@ local function cache(line, variables)
 	key = table.concat(key, "¤");
 
 	if not _cache[key] then
-		_cache[key] = lexer(line, variables);
+		_cache[key] = lexer(line, variables, labels);
 	end
 
 	return _cache[key];
@@ -99,6 +99,19 @@ function compile(name, input, testing)
 	local ret = {};
 	line_number = 0;
 	labels["99"] = 99;
+
+	for line in input:gmatch"[^\n]*" do
+		line = line:gsub("^%s+", ""):gsub("%s+$", "");
+		line_number = line_number + 1;
+		if not line:match"^:" then
+			line = line
+				:gsub("^%s*([%w%.]+):", function(name)
+					labels[name] = -1;
+					return "";
+				end)
+			;
+		end
+	end
 
 	for line in input:gmatch"[^\n]*" do
 		line = line:gsub("^%s+", ""):gsub("%s+$", "");
@@ -117,7 +130,7 @@ function compile(name, input, testing)
 		else
 			line = line
 				:gsub("^%s*([%w%.]+):", function(name)
-					assert(not variables[name] and not labels[name], "variable/label already exists: " .. name);
+					assert(not variables[name] and (not labels[name] or labels[name] == -1), "variable/label already exists: " .. name);
 					table.insert(labels, name);
 					return "";
 				end)
@@ -125,7 +138,7 @@ function compile(name, input, testing)
 			;
 
 			if #line > 0 then
-				local node = cache(line, variables);
+				local node = cache(line, variables, labels);
 
 				if node and node.func then
 					if node.func.ret == "void" then

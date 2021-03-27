@@ -1,4 +1,4 @@
-local current_line, variables;
+local current_line, variables, labels;
 
 local dynamicFunc = {min = true, max = true, rnd =  true};
 
@@ -69,7 +69,9 @@ local function nextToken(str, pos, prev)
 end
 
 local function resolveID(token)
-	if token.type == "identifier" and not token.func then
+	if token.type == "identifier" and not token.func and labels[token.value:lower()] then
+		token.type = "label"
+	elseif token.type == "identifier" and not token.func then
 		token.var = assert(variables[token.value:lower()], tokenError(token, "undefined variable: " .. token.value));
 		token.type = "string";
 		
@@ -92,7 +94,7 @@ local function resolveType(token)
 		return math.type(token.value) == "integer" and "int" or "double";
 	end
 	
-	return token.type;
+	return token.type == "label" and "int" or token.type;
 end
 
 local function typecheck(left, op, right)
@@ -107,8 +109,8 @@ local function consumeTokensWorker(node)
 		local arg = node.func and node.func.args[#node.args + 1];
 		local token = node.tokens[1];
 
-		if arg and arg.type == "label" then
-			if token.type == "number" or (token.type == "identifier" and not token.func and not variables[token.value:lower()]) then
+		if arg and arg.type == "int" then
+			if token.type == "identifier" and not token.func and not variables[token.value:lower()] and labels[token.value:lower()] then
 				token.type = "label";
 				token.value = tostring(token.value);
 			end
@@ -241,7 +243,7 @@ local function consumeTokens(node)
 		assert(expected, tokenError(node, last, string.format("function %s expects %s arguments, got %s", node.func.short, #node.func.args, arg)));
 
 		if not dynamicFunc[node.func.name] then
-			assert(type == expected.type or (type == "int" and expected.type == "label") or (type == "string" and expected.type:match"^op"), tokenError(node, last, string.format("bad argument #%s to %s (%s expected, got %s)", arg, node.func.short, expected.type, type)));
+			assert(type == expected.type or (type == "label" and expected.type == "int") or (type == "string" and expected.type:match"^op"), tokenError(node, last, string.format("bad argument #%s to %s (%s expected, got %s)", arg, node.func.short, expected.type, type)));
 
 			if expected.valid and (last.type == "number" or last.type == "string") then
 				local status, err = expected.valid(last.value);
@@ -251,7 +253,7 @@ local function consumeTokens(node)
 	end
 end
 
-function lexer(line, vars)
+function lexer(line, vars, lbls)
 	local debug = {};
 	local node, prev;
 	local pos = 1;
@@ -261,6 +263,7 @@ function lexer(line, vars)
 	
 	current_line = line;
 	variables = vars;
+	labels = lbls;
 
 	while pos <= #line do
 		local token = nextToken(line, pos, prev);

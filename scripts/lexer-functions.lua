@@ -108,8 +108,8 @@ void generic.stop(string:script) Generic
 void generic.wait(double:seconds) Generic
 void generic.waitwhile(bool) Generic
 void generic.waituntil(bool) Generic
-void generic.goto(label) Generic
-void generic.gotoif(label, bool) Generic
+void generic.goto(int) Generic
+void generic.gotoif(int, bool) Generic
 void generic.click(vector) Generic
 void generic.slider(vector:where, double:value[0-1]) Generic
 void generic.scrollrect(vector:where, double:horizontal[scroll], double:vertical[scroll]) Generic #scrollbar#
