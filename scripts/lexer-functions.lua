@@ -4,7 +4,7 @@ FUNCTION = {};
 local strings = {
 	window = {"towertesting", "tradingpost", "powerplant", "factory", "laboratory", "shipyard", "workshop", "arcade", "museum", "headquarters", "constructionfirm", "statueofcubos", "mine"},
 
-	item = {"block.dense", "plate.dense", "screw", "plate.rubber", "plate.circuit", "ring", "pipe", "wire", "circuit"},
+	item = {"block.dense", "plate.dense", "screw", "plate.rubber", "plate.circuit", "ring", "pipe", "wire", "circuit", "hammer"},
 	craft = {"motor", "chip", "cable.insulated", "block", "pump", "plate.stack", "lump", "producer.town", "producer.mine", "producer.powerplant", "producer.factory", "producer.workshop", "producer.constructionFirm", "producer.headquarters", "producer.laboratory", "producer.tradingpost", "producer.arcade", "producer.museum", "producer.shipyard", "producer.statueofcubos", "producer.gems", "producer.exoticgems", "machine.oven", "machine.presser", "machine.transportbelt", "machine.crusher", "machine.mixer", "machine.refinery", "machine.assembler", "machine.shaper", "machine.cutter", "machine.boiler"},
 	produce = {"rubber", "ore", "dust", "ingot", "plate.stack", "rod", "plate", "cable", "lump", "block"},
 	machine = {"oven", "assembler", "refinery", "crusher", "cutter", "presser", "mixer", "shaper", "boiler"},
@@ -46,6 +46,7 @@ VALIDATOR = {
 	selly = function(value) return rangeValid(value, 0, 12); end,
 
 	dig = function(value) return rangeValid(value, 0, 3); end,
+	minetab = function(value) return rangeValid(value, 1, 12); end,
 
 	tier = function(value) return rangeValid(value, 1, 10); end,
 	item = function(value) return stringValid("item", value, "Items"); end,
@@ -63,15 +64,24 @@ local primitives = {void=1, impulse=1, bool=1, int=1, double=1, string=1, vector
 local functions = [[
 impulse wakeup() Impulse
 impulse key.<char>() {Impulse impulse key.#() 0-9, a-z}
-impulse open.mine() Impulse
+impulse open.arcade() Impulse
+impulse open.constructionFirm() Impulse
 impulse open.factory() Impulse
-impulse open.workshop() Impulse
-impulse open.powerplant() Impulse
+impulse open.headquarters() Impulse
+impulse open.laboratory() Impulse
+impulse open.mine() Impulse
 impulse open.museum() Impulse
+impulse open.powerplant() Impulse
+impulse open.shipyard() Impulse
+impulse open.statueofcubos() Impulse
+impulse open.tradingpost() Impulse
+impulse open.workshop() Impulse
 impulse game.newround() Impulse
 
 void <scope>.<type>.set(string:variable, <type>)
 <type> <scope>.<type>.get(string:variable)
+void global.unset(string:variable) #gu#
+void local.unset(string:variable) #lu#
 bool comparison.<typeext>(<typeext>, op_comp, <typeext>)
 <type> arithmetic.<type>(<type>, op_mod, <type>)
 
@@ -137,8 +147,10 @@ void tower.module.useinstant(int:skill) Tower
 
 void powerplant.sell(int:x[sellx], int:y[selly]) Power Plant
 
+bool mine.hasLayers() Mine
 void mine.newlayer() Mine
 void mine.dig(int:x[dig], int:y[dig]) Mine
+void mine.tab(int[minetab]) Mine
 
 bool factory.machine.active(string:machine[machine]) Factory
 double factory.items.count(string:item[item], int:tier[tier]) Factory

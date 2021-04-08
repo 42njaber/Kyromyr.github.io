@@ -319,9 +319,9 @@ function import(input)
 				end
 			end
 
-			local scope, type, func_name = func.name:match"(%a+).(%a+).(%a+)";
+			local scope, type, func_name = func.name:match"(%a+)%.(%a+)%.(%a+)";
 
-			if scope == "global" or scope == "local" then
+			if (scope == "global" or scope == "local") and args[1]:match'^"' then
 				local var = args[1]:sub(2,-2):lower();
 
 				if var == var:match(TOKEN.identifier.pattern) then
