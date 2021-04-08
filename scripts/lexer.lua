@@ -69,7 +69,7 @@ local function nextToken(str, pos, prev)
 end
 
 local function resolveID(token)
-	if token.type == "identifier" and not token.func and labels[token.value:lower()] then
+	if token.type == "identifier" and not token.func and labels[token.value] then
 		token.type = "label"
 	elseif token.type == "identifier" and not token.func then
 		token.var = assert(variables[token.value:lower()], tokenError(token, "undefined variable: " .. token.value));
